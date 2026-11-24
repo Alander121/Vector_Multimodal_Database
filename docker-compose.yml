@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vrt-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: videodb
+      POSTGRES_USER: video
+      POSTGRES_PASSWORD: video
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U video -d videodb"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  minio:
+    image: minio/minio:latest
+    container_name: vrt-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    container_name: vrt-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://video:video@postgres:5432/videodb
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: video-frames
+      HF_HOME: /models/huggingface
+      TRANSFORMERS_CACHE: /models/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
+      DEVICE: auto
+      SIGLIP_MODEL: google/siglip2-base-patch16-224
+      DINO_MODEL: facebook/dinov2-base
+      EMBED_BATCH_SIZE: "4"
+      FRAME_SAMPLE_FPS: "0.5"
+      FAISS_DIR: /app/faiss_index
+      FAISS_INDEX_TYPE: hnsw
+      FAISS_HNSW_M: "32"
+      FAISS_HNSW_EF_CONSTRUCTION: "200"
+      FAISS_HNSW_EF_SEARCH: "64"
+      SEARCH_FETCH: "100"
+      RRF_K: "60"
+      SIGLIP_WEIGHT: "0.60"
+      DINO_WEIGHT: "0.40"
+      TORCH_NUM_THREADS: "4"
+    volumes:
+      - ./data:/app/data
+      - ./faiss_index:/app/faiss_index
+      - hf_cache:/models/huggingface
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+volumes:
+  postgres_data:
+  minio_data:
+  hf_cache:
